@@ -1,0 +1,251 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  STAFF
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING
+  REJECTED
+  SUSPENDED
+}
+
+enum EventStatus {
+  DRAFT
+  PENDING_APPROVAL
+  PUBLISHED
+  CANCELLED
+}
+
+enum SeatStatus {
+  AVAILABLE
+  LOCKED
+  BOOKED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  CREATED
+  PAID
+  REFUNDED
+}
+
+enum TicketStatus {
+  VALID
+  USED
+  CANCELLED
+}
+
+enum RefundStatus {
+  PROCESSED
+  FAILED
+}
+
+model User {
+  id           Int          @id @default(autoincrement())
+  name         String
+  email        String       @unique
+  passwordHash String
+  role         Role         @default(CUSTOMER)
+  status       UserStatus   @default(ACTIVE)
+  verified     Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+  venues       Venue[]
+  layouts      SeatLayout[]
+  events       Event[]
+  orders       Order[]
+  audits       AuditLog[]
+}
+
+model City {
+  id     Int     @id @default(autoincrement())
+  name   String  @unique
+  venues Venue[]
+}
+
+model Venue {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String
+  city      City     @relation(fields: [cityId], references: [id])
+  cityId    Int
+  manager   User     @relation(fields: [managerId], references: [id])
+  managerId Int
+  screens   Screen[]
+}
+
+// Reusable template. Per-show state lives in ShowSeat.
+model SeatLayout {
+  id      Int      @id @default(autoincrement())
+  name    String
+  layout  Json
+  owner   User     @relation(fields: [ownerId], references: [id])
+  ownerId Int
+  screens Screen[]
+}
+
+model Screen {
+  id       Int        @id @default(autoincrement())
+  name     String
+  venue    Venue      @relation(fields: [venueId], references: [id])
+  venueId  Int
+  layout   SeatLayout @relation(fields: [layoutId], references: [id])
+  layoutId Int
+  shows    Show[]
+}
+
+model Event {
+  id          Int         @id @default(autoincrement())
+  title       String
+  description String      @default("")
+  type        String      @default("MOVIE")
+  durationMin Int
+  language    String      @default("English")
+  genre       String      @default("General")
+  rating      String      @default("U")
+  posterUrl   String      @default("")
+  status      EventStatus @default(PENDING_APPROVAL)
+  createdBy   User        @relation(fields: [createdById], references: [id])
+  createdById Int
+  createdAt   DateTime    @default(now())
+  shows       Show[]
+}
+
+model Show {
+  id        Int           @id @default(autoincrement())
+  event     Event         @relation(fields: [eventId], references: [id])
+  eventId   Int
+  screen    Screen        @relation(fields: [screenId], references: [id])
+  screenId  Int
+  startsAt  DateTime
+  cancelled Boolean       @default(false)
+  tiers     PricingTier[]
+  seats     ShowSeat[]
+  orders    Order[]
+
+  @@index([eventId, startsAt])
+}
+
+model PricingTier {
+  id       Int    @id @default(autoincrement())
+  show     Show   @relation(fields: [showId], references: [id], onDelete: Cascade)
+  showId   Int
+  category String
+  price    Int
+
+  @@unique([showId, category])
+}
+
+model ShowSeat {
+  id          Int         @id @default(autoincrement())
+  show        Show        @relation(fields: [showId], references: [id], onDelete: Cascade)
+  showId      Int
+  row         String
+  number      Int
+  category    String
+  price       Int
+  status      SeatStatus  @default(AVAILABLE)
+  lockedUntil DateTime?
+  orderId     Int?
+  items       OrderItem[]
+  tickets     Ticket[]
+
+  @@unique([showId, row, number])
+  @@index([showId, status])
+}
+
+model Order {
+  id          Int         @id @default(autoincrement())
+  user        User        @relation(fields: [userId], references: [id])
+  userId      Int
+  show        Show        @relation(fields: [showId], references: [id])
+  showId      Int
+  status      OrderStatus @default(PENDING)
+  totalAmount Int         @default(0)
+  expiresAt   DateTime
+  createdAt   DateTime    @default(now())
+  items       OrderItem[]
+  payments    Payment[]
+  tickets     Ticket[]
+  refunds     Refund[]
+
+  @@index([userId])
+  @@index([status, expiresAt])
+}
+
+model OrderItem {
+  id         Int      @id @default(autoincrement())
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId    Int
+  showSeat   ShowSeat @relation(fields: [showSeatId], references: [id])
+  showSeatId Int
+  price      Int
+}
+
+model Payment {
+  id               Int           @id @default(autoincrement())
+  order            Order         @relation(fields: [orderId], references: [id])
+  orderId          Int
+  gatewayOrderId   String        @unique
+  gatewayPaymentId String?
+  amount           Int
+  status           PaymentStatus @default(CREATED)
+  rawPayload       Json?
+  createdAt        DateTime      @default(now())
+  refunds          Refund[]
+}
+
+model Ticket {
+  id         Int          @id @default(autoincrement())
+  code       String       @unique @default(uuid())
+  order      Order        @relation(fields: [orderId], references: [id])
+  orderId    Int
+  showSeat   ShowSeat     @relation(fields: [showSeatId], references: [id])
+  showSeatId Int
+  status     TicketStatus @default(VALID)
+  usedAt     DateTime?
+}
+
+model Refund {
+  id         Int          @id @default(autoincrement())
+  order      Order        @relation(fields: [orderId], references: [id])
+  orderId    Int
+  payment    Payment      @relation(fields: [paymentId], references: [id])
+  paymentId  Int
+  amount     Int
+  status     RefundStatus
+  reason     String
+  gatewayRef String?
+  createdAt  DateTime     @default(now())
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  actor     User?    @relation(fields: [actorId], references: [id])
+  actorId   Int?
+  action    String
+  entity    String
+  entityId  String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
